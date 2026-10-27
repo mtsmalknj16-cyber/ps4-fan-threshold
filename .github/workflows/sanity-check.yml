@@ -26,18 +26,12 @@ jobs:
       -
         name: "Build Payload"
         run: |
-          export PS4SDK=/opt/ps4sdk
+          export PS4SDK=/lib/ps4-payload-sdk
           make
       -
         name: "Upload Binary Artifact"
         uses: actions/upload-artifact@v4
-      
         with:
+          name: payload-bin
           path: ./*.bin
-          if-no-files-found: error
-      -
-        name: "Upload Map Artifact"
-        uses: actions/upload-artifact@v4
-        with:
-          path: ./*.map
           if-no-files-found: error
