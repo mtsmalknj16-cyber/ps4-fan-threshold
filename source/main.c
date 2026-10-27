@@ -1,24 +1,13 @@
-//#define DEBUG_SOCKET
-#define DEBUG_IP "192.168.2.2"
-#define DEBUG_PORT 9023
-
 #include "ps4.h"
 
-uint8_t THRESHOLDTEMP = 60;
+uint8_t THRESHOLDTEMP = 30;
 
 int _main(struct thread *td) {
   UNUSED(td);
 
   initKernel();
   initLibc();
-
-#ifdef DEBUG_SOCKET
-  initNetwork();
-  DEBUG_SOCK = SckConnect(DEBUG_IP, DEBUG_PORT);
-#endif
-
   jailbreak();
-
   initSysUtil();
 
   int fd = open("/dev/icc_fan", O_RDONLY, 0);
@@ -33,11 +22,6 @@ int _main(struct thread *td) {
 
   float fahrenheit = ((THRESHOLDTEMP * 9) / 5) + 32;
   printf_notification("Fan Threshold Set to %i°C/%i°F!", THRESHOLDTEMP, (int)fahrenheit);
-
-#ifdef DEBUG_SOCKET
-  printf_debug("Closing socket...\n");
-  SckClose(DEBUG_SOCK);
-#endif
 
   return 0;
 }
