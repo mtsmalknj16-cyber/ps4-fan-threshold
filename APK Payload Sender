@@ -1,0 +1,376 @@
+name: Build APK
+on:
+  workflow_dispatch:
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+      - name: Write gradle files
+        run: |
+          mkdir -p ps4sender/app/src/main/java/com/ps4/sender
+          cd ps4sender
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+                  gradlePluginPortal()
+              }
+          }
+          dependencyResolutionManagement {
+              repositories {
+                  google()
+                  mavenCentral()
+              }
+          }
+          rootProject.name = "PS4Sender"
+          include ':app'
+          EOF
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2g -Dfile.encoding=UTF-8
+          EOF
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.ps4.sender'
+              compileSdk 34
+              defaultConfig {
+                  applicationId 'com.ps4.sender'
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName '1.0'
+              }
+              compileOptions {
+                  sourceCompatibility JavaVersion.VERSION_1_8
+                  targetCompatibility JavaVersion.VERSION_1_8
+              }
+          }
+          EOF
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-permission android:name="android.permission.INTERNET" />
+              <application
+                  android:label="PS4 Sender"
+                  android:supportsRtl="true"
+                  android:theme="@android:style/Theme.DeviceDefault.NoActionBar">
+                  <activity android:name=".MainActivity" android:exported="true">
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+      - name: Write app code
+        run: |
+          cat > ps4sender/app/src/main/java/com/ps4/sender/MainActivity.java <<'EOF'
+          package com.ps4.sender;
+
+          import android.app.Activity;
+          import android.content.Intent;
+          import android.content.SharedPreferences;
+          import android.database.Cursor;
+          import android.graphics.Color;
+          import android.graphics.Typeface;
+          import android.graphics.drawable.GradientDrawable;
+          import android.net.Uri;
+          import android.os.Bundle;
+          import android.provider.OpenableColumns;
+          import android.text.InputType;
+          import android.view.Gravity;
+          import android.view.View;
+          import android.view.ViewGroup;
+          import android.widget.Button;
+          import android.widget.EditText;
+          import android.widget.LinearLayout;
+          import android.widget.ScrollView;
+          import android.widget.TextView;
+          import java.io.InputStream;
+          import java.io.OutputStream;
+          import java.net.ConnectException;
+          import java.net.InetSocketAddress;
+          import java.net.Socket;
+          import java.net.SocketTimeoutException;
+          import java.text.SimpleDateFormat;
+          import java.util.Date;
+          import java.util.Locale;
+
+          public class MainActivity extends Activity {
+              private static final int PICK = 1;
+              private static final int BG = Color.parseColor("#0F1B2D");
+              private static final int PANEL = Color.parseColor("#16263D");
+              private static final int LINE = Color.parseColor("#2A3E5C");
+              private static final int TEXT = Color.parseColor("#EAF0F8");
+              private static final int MUTED = Color.parseColor("#93A4BC");
+              private static final int ACCENT = Color.parseColor("#3A74FF");
+              private static final int MATCH = ViewGroup.LayoutParams.MATCH_PARENT;
+              private static final int WRAP = ViewGroup.LayoutParams.WRAP_CONTENT;
+
+              private EditText ipField, portField;
+              private Button sendBtn;
+              private TextView fileLabel, logView;
+              private Uri fileUri;
+              private String fileName;
+              private long fileSize = -1;
+              private SharedPreferences prefs;
+
+              private int dp(int v) {
+                  return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+              }
+
+              private GradientDrawable box(int fill, int stroke, int radius) {
+                  GradientDrawable d = new GradientDrawable();
+                  d.setColor(fill);
+                  d.setCornerRadius(dp(radius));
+                  if (stroke != 0) d.setStroke(dp(1), stroke);
+                  return d;
+              }
+
+              private TextView label(String s) {
+                  TextView t = new TextView(this);
+                  t.setText(s);
+                  t.setTextColor(MUTED);
+                  t.setTextSize(15);
+                  t.setPadding(0, dp(14), 0, dp(6));
+                  return t;
+              }
+
+              private EditText input(int type, String hint) {
+                  EditText e = new EditText(this);
+                  e.setInputType(type);
+                  e.setSingleLine(true);
+                  e.setTextColor(TEXT);
+                  e.setHintTextColor(MUTED);
+                  e.setHint(hint);
+                  e.setTextSize(19);
+                  e.setBackground(box(PANEL, LINE, 10));
+                  e.setPadding(dp(14), 0, dp(14), 0);
+                  e.setMinHeight(dp(52));
+                  e.setTextDirection(View.TEXT_DIRECTION_LTR);
+                  e.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+                  return e;
+              }
+
+              private Button button(String s, int fill, int stroke, int color, int size) {
+                  Button b = new Button(this);
+                  b.setText(s);
+                  b.setAllCaps(false);
+                  b.setTextColor(color);
+                  b.setTextSize(size);
+                  b.setTypeface(Typeface.DEFAULT_BOLD);
+                  b.setBackground(box(fill, stroke, 12));
+                  return b;
+              }
+
+              @Override
+              protected void onCreate(Bundle state) {
+                  super.onCreate(state);
+                  getWindow().setStatusBarColor(BG);
+                  getWindow().setNavigationBarColor(BG);
+                  prefs = getSharedPreferences("ps4", MODE_PRIVATE);
+
+                  ScrollView sv = new ScrollView(this);
+                  sv.setBackgroundColor(BG);
+                  sv.setFillViewport(true);
+                  LinearLayout root = new LinearLayout(this);
+                  root.setOrientation(LinearLayout.VERTICAL);
+                  root.setPadding(dp(16), dp(20), dp(16), dp(24));
+                  sv.addView(root, new ViewGroup.LayoutParams(MATCH, WRAP));
+
+                  LinearLayout header = new LinearLayout(this);
+                  header.setOrientation(LinearLayout.HORIZONTAL);
+                  header.setGravity(Gravity.CENTER_VERTICAL);
+                  TextView title = new TextView(this);
+                  title.setText("إرسال payload");
+                  title.setTextColor(TEXT);
+                  title.setTextSize(22);
+                  title.setTypeface(Typeface.DEFAULT_BOLD);
+                  header.addView(title, new LinearLayout.LayoutParams(0, WRAP, 1f));
+                  Button rest = button("REST", Color.TRANSPARENT, LINE, MUTED, 15);
+                  header.addView(rest, new LinearLayout.LayoutParams(dp(84), dp(44)));
+                  root.addView(header, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                  root.addView(label("عنوان IP"), new LinearLayout.LayoutParams(MATCH, WRAP));
+                  ipField = input(InputType.TYPE_CLASS_NUMBER | InputType.TYPE_NUMBER_FLAG_DECIMAL, "192.168.1.103");
+                  ipField.setText(prefs.getString("ip", "192.168.1.103"));
+                  root.addView(ipField, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                  root.addView(label("البورت"), new LinearLayout.LayoutParams(MATCH, WRAP));
+                  portField = input(InputType.TYPE_CLASS_NUMBER, "9090");
+                  portField.setText(prefs.getString("port", "9090"));
+                  root.addView(portField, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                  Button pick = button("اختيار ملف الـ payload", PANEL, ACCENT, TEXT, 17);
+                  LinearLayout.LayoutParams pl = new LinearLayout.LayoutParams(MATCH, dp(60));
+                  pl.topMargin = dp(22);
+                  root.addView(pick, pl);
+
+                  fileLabel = new TextView(this);
+                  fileLabel.setTextColor(MUTED);
+                  fileLabel.setTextSize(15);
+                  fileLabel.setPadding(0, dp(8), 0, dp(8));
+                  root.addView(fileLabel, new LinearLayout.LayoutParams(MATCH, WRAP));
+
+                  sendBtn = button("إرسال", ACCENT, 0, Color.WHITE, 22);
+                  LinearLayout.LayoutParams sl = new LinearLayout.LayoutParams(MATCH, dp(68));
+                  sl.topMargin = dp(8);
+                  root.addView(sendBtn, sl);
+
+                  logView = new TextView(this);
+                  logView.setTextColor(TEXT);
+                  logView.setHintTextColor(MUTED);
+                  logView.setHint("هون بتظهر نتيجة الإرسال.");
+                  logView.setTextSize(15);
+                  logView.setMinHeight(dp(120));
+                  logView.setPadding(dp(14), dp(12), dp(14), dp(12));
+                  logView.setBackground(box(Color.TRANSPARENT, LINE, 10));
+                  LinearLayout.LayoutParams ll = new LinearLayout.LayoutParams(MATCH, WRAP);
+                  ll.topMargin = dp(22);
+                  root.addView(logView, ll);
+
+                  pick.setOnClickListener(v -> {
+                      Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+                      i.addCategory(Intent.CATEGORY_OPENABLE);
+                      i.setType("*/*");
+                      startActivityForResult(i, PICK);
+                  });
+                  rest.setOnClickListener(v -> {
+                      fileUri = null;
+                      fileName = null;
+                      fileSize = -1;
+                      logView.setText("");
+                      updateUi();
+                  });
+                  sendBtn.setOnClickListener(v -> send());
+
+                  setContentView(sv);
+                  updateUi();
+              }
+
+              @Override
+              protected void onActivityResult(int req, int res, Intent data) {
+                  super.onActivityResult(req, res, data);
+                  if (req != PICK || res != RESULT_OK || data == null || data.getData() == null) return;
+                  fileUri = data.getData();
+                  fileName = null;
+                  fileSize = -1;
+                  try (Cursor c = getContentResolver().query(fileUri, null, null, null, null)) {
+                      if (c != null && c.moveToFirst()) {
+                          int n = c.getColumnIndex(OpenableColumns.DISPLAY_NAME);
+                          int s = c.getColumnIndex(OpenableColumns.SIZE);
+                          if (n >= 0) fileName = c.getString(n);
+                          if (s >= 0 && !c.isNull(s)) fileSize = c.getLong(s);
+                      }
+                  }
+                  updateUi();
+              }
+
+              private void updateUi() {
+                  boolean has = fileUri != null;
+                  if (has) {
+                      String n = fileName == null ? "payload" : fileName;
+                      String sz = fileSize >= 0 ? "  (" + (fileSize / 1024) + " KB)" : "";
+                      fileLabel.setText(n + sz);
+                  } else {
+                      fileLabel.setText("ما اخترت ملف بعد");
+                  }
+                  sendBtn.setEnabled(has);
+                  sendBtn.setAlpha(has ? 1f : 0.4f);
+              }
+
+              private void addLog(String msg) {
+                  String t = new SimpleDateFormat("HH:mm:ss", Locale.US).format(new Date());
+                  CharSequence old = logView.getText();
+                  logView.setText(t + "  " + msg + (old.length() > 0 ? "\n\n" + old : ""));
+              }
+
+              private void send() {
+                  final String host = ipField.getText().toString().trim();
+                  int p;
+                  try {
+                      p = Integer.parseInt(portField.getText().toString().trim());
+                  } catch (Exception e) {
+                      p = -1;
+                  }
+                  final int port = p;
+                  if (!host.matches("\\d{1,3}(\\.\\d{1,3}){3}")) {
+                      addLog("عنوان الـ IP غير صحيح.");
+                      return;
+                  }
+                  if (port < 1 || port > 65535) {
+                      addLog("البورت لازم يكون بين 1 و 65535.");
+                      return;
+                  }
+                  if (fileUri == null) {
+                      addLog("اختار ملف payload أول.");
+                      return;
+                  }
+                  prefs.edit().putString("ip", host).putString("port", String.valueOf(port)).apply();
+                  final Uri uri = fileUri;
+                  final String name = fileName == null ? "payload" : fileName;
+                  sendBtn.setEnabled(false);
+                  sendBtn.setAlpha(0.4f);
+                  sendBtn.setText("عم يرسل...");
+                  addLog("عم يرسل " + name + " إلى " + host + ":" + port);
+
+                  new Thread(() -> {
+                      long sent = 0;
+                      String error = null;
+                      try (Socket s = new Socket()) {
+                          s.connect(new InetSocketAddress(host, port), 8000);
+                          InputStream raw = getContentResolver().openInputStream(uri);
+                          if (raw == null) throw new Exception("ما قدرت أقرأ الملف");
+                          try (InputStream in = raw) {
+                              OutputStream out = s.getOutputStream();
+                              byte[] buf = new byte[16384];
+                              int n;
+                              while ((n = in.read(buf)) > 0) {
+                                  out.write(buf, 0, n);
+                                  sent += n;
+                              }
+                              out.flush();
+                              s.shutdownOutput();
+                          }
+                      } catch (ConnectException e) {
+                          error = "ما قدرت أتصل بالـ PS4. تأكد إنه GoldHEN شغال وإنه الـ IP والبورت صح.";
+                      } catch (SocketTimeoutException e) {
+                          error = "انتهت المهلة. تأكد إنه التلفون والـ PS4 على نفس الشبكة.";
+                      } catch (Exception e) {
+                          error = "فشل الإرسال: " + e.getMessage();
+                      }
+                      final long total = sent;
+                      final String err = error;
+                      runOnUiThread(() -> {
+                          if (err == null) addLog("انبعت (" + total + " بايت). تفقد شاشة الـ PS4.");
+                          else addLog(err);
+                          sendBtn.setText("إرسال");
+                          updateUi();
+                      });
+                  }).start();
+              }
+          }
+          EOF
+      - name: Build
+        run: cd ps4sender && gradle assembleDebug --no-daemon
+      - uses: actions/upload-artifact@v4
+        with:
+          name: PS4Sender-apk
+          path: ps4sender/app/build/outputs/apk/debug/app-debug.apk
