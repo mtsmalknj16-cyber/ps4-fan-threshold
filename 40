@@ -5,7 +5,7 @@
 
 #include "ps4.h"
 
-uint8_t THRESHOLDTEMP = 40;
+uint8_t THRESHOLDTEMP = 30;
 
 int _main(struct thread *td) {
   UNUSED(td);
